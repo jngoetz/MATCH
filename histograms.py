@@ -3,6 +3,7 @@ from typing import List, NamedTuple, Sequence, Tuple
 import numpy as np
 from colormath.color_conversions import convert_color
 from colormath.color_objects import LuvColor, sRGBColor
+from colorspace import sRGB
 from matplotlib import pyplot as plt
 from matplotlib.axes import Axes
 from PIL.Image import Image
@@ -14,9 +15,9 @@ debug_enabled = False
 
 
 class Luv(NamedTuple):
-    L: int  # 0 to 100
-    u: int  # -134 to 220
-    v: int  # -140 to 122
+    L: float  # 0 to 100
+    u: float  # -134 to 220
+    v: float  # -140 to 122
 
     @classmethod
     def from_rgb(cls, pixel: Sequence[int]):
@@ -26,9 +27,9 @@ class Luv(NamedTuple):
             target_illuminant="d65",
         )
         return cls(
-            int(np.clip(np.round(luv.luv_l), 0, 100)),
-            int(np.clip(np.round(luv.luv_u), -134, 220)),
-            int(np.clip(np.round(luv.luv_v), -140, 122)),
+            np.clip(luv.luv_l, 0, 100),
+            np.clip(luv.luv_u, -134, 220),
+            np.clip(luv.luv_v, -140, 122),
         )
 
     @classmethod
@@ -53,8 +54,8 @@ class Luv(NamedTuple):
 
 
 class Uv(NamedTuple):
-    u: int  # -134 to 220
-    v: int  # -140 to 122
+    u: float  # -134 to 220
+    v: float  # -140 to 122
 
 
 class Histogram(dict[int, int]):
@@ -90,7 +91,7 @@ class Histogram(dict[int, int]):
             params = default_params
         if p2 is None:
             p2, _ = self.peak()
-        keys = sorted(self.keys())
+        keys = list(range(min(self.keys()), max(self.keys()) + 1))
         values = [self[k] for k in keys]
 
         try:
@@ -171,7 +172,10 @@ class UvHistogram(dict[Uv, int]):
         uv.update(self)
         return uv
 
-    def plot(self, ax: Axes, Ls: dict[Uv, int]):
+    def plot(self, ax: Axes, Ls: dict[Uv, int] = None):
+        if Ls is None:
+            Ls = self.luv_histo.most_common_Ls()
+
         u, v, count = [], [], []
         colours = []
         for (iu, iv), icount in self.items():
@@ -259,91 +263,111 @@ class UvHistogram(dict[Uv, int]):
             return mtns.pop(0)
 
     def mountains(self, params: MountainParams | None = None, count=-1):
-        candidates = sorted(self.items(), key=lambda x: x[1], reverse=True)
-        mountains: list[Mountain] = []
-
         if params is None:
             params = default_params
 
-        def contains(point):
-            for m in mountains:
-                if point in m:
+        # Pre-sort peaks by count (descending)
+        biggest_peaks = sorted(self.items(), key=lambda x: x[1], reverse=True)
+
+        # Use top 80% as candidates, but limit to reasonable number for performance
+        num_candidates = min(len(biggest_peaks) - (len(biggest_peaks) // 5), 1000)
+        candidates = biggest_peaks[:num_candidates]
+
+        # Pre-compute slices to avoid repeated calculations
+        u_slices = {}
+        v_slices = {}
+
+        def get_u_slice(target_v):
+            if target_v not in u_slices:
+                u_slices[target_v] = self.slice_u(target_v)
+            return u_slices[target_v]
+
+        def get_v_slice(target_u):
+            if target_u not in v_slices:
+                v_slices[target_u] = self.slice_v(target_u)
+            return v_slices[target_u]
+
+        def candidate_mountain(peak):
+            u_hist = get_u_slice(peak[1])
+            v_hist = get_v_slice(peak[0])
+            try:
+                um, u_pts = u_hist.mountain(params, peak[0])
+                vm, v_pts = v_hist.mountain(params, peak[1])
+                return Mountain(um, vm)
+            except ValueError:
+                return None
+
+        # Use set for faster membership testing and removal
+        remaining_candidates = set(range(len(candidates)))
+
+        def remove_noncandidates(mtn):
+            to_remove = []
+            count = 0
+            for i in list(remaining_candidates):
+                peak = candidates[i][0]
+                if peak in mtn:
+                    count += 1
+                    if count > 4:  # arbitrary threshold to reduce computation
+                        to_remove.append(i)
+            # Remove in reverse order to maintain indices
+            for i in sorted(to_remove, reverse=True):
+                remaining_candidates.discard(i)
+
+        # Build candidate mountains more efficiently
+        candidate_mountains = []
+        processed_indices = []
+
+        for i in list(remaining_candidates):
+            peak, _ = candidates[i]
+            m = candidate_mountain(peak)
+            if m is not None and not m.has_zero_axis():
+                size = self.mountain_size(m)
+                candidate_mountains.append((m, size))
+                processed_indices.append(i)
+                remove_noncandidates(m)
+
+        # Remove processed candidates
+        for i in processed_indices:
+            remaining_candidates.discard(i)
+
+        candidate_mountains.sort(key=lambda x: x[1], reverse=True)
+
+        mountains: list[Mountain] = []
+
+        # Check overlap against accepted mountains
+        def has_overlap(mtn):
+            for existing_mtn in mountains:
+                if existing_mtn.overlaps(mtn):
                     return True
             return False
 
-        def overlaps(mtn):
-            for m in mountains:
-                if m.overlaps(mtn):
-                    return True
-            return False
-
-        while len(candidates) > 0 and (count < 0 or len(mountains) < count):
-            peak, _ = candidates.pop(0)
-            if contains(peak):
-                # fast check, because finding the boundary of the candidate
-                continue
-            u = self.slice_u(peak[1])
-            v = self.slice_v(peak[0])
-
-            um, u_pts = u.mountain(params, peak[0])
-            vm, v_pts = v.mountain(params, peak[1])
-            m = Mountain(um, vm)
-
-            if m.u[1] in (m.u[0], m.u[2]) or m.v[1] in (m.v[0], m.v[2]):
-                #     # one of the axes has a 0-radius, so it's not a valid mountain
-                continue
-            if overlaps(m):
-                # don't let mountains overlap
-                continue
-
-            mountains.append(m)
-            if debug_enabled:
-                print(f"{m} : {self.mountain_size(m)}")
-                fig, (ax_u, ax_v, ax_L) = plt.subplots(3)
-                fig.suptitle(f"Peak: {peak}")
-                fig.text(
-                    0.5,
-                    0.9,
-                    f"height: {int(self[peak])}; size: {int(self.mountain_size(m))}",
-                    ha="center",
-                )
-                c = [
-                    "purple",
-                    "orange",
-                    "purple",
-                    "black",
-                    "purple",
-                    "orange",
-                    "purple",
-                ]
-                c2 = ["purple", "black", "purple"]
-
-                u.plot(ax_u)
-                ax_u.vlines(
-                    u_pts, ymin=0, ymax=max(u.values()), colors=c, linestyles="dashed"
-                )
-                ax_u.vlines(m.u, ymin=0, ymax=max(u.values()), colors=c2)
-                ax_u.set_xlabel("u")
-
-                v.plot(ax_v)
-                ax_v.vlines(
-                    v_pts, ymin=0, ymax=max(v.values()), colors=c, linestyles="dashed"
-                )
-                ax_v.vlines(m.v, ymin=0, ymax=max(v.values()), colors=c2)
-                ax_v.set_xlabel("v")
-
-                L = self.luv_histo.Ls(peak)
-                L.plot(ax_L)
-                ax_L.set_xlabel("L")
-
-                fig.savefig(f"debug/mountain_{len(mountains)}.png")
-                plt.close(fig)
+        # Process candidate mountains efficiently
+        for m, size in candidate_mountains:
+            if count >= 0 and len(mountains) >= count:
+                break
+            if not has_overlap(m):
+                mountains.append(m)
 
         return mountains
 
     def mountain_size(self, mtn: Mountain):
         """Returns the number of pixels in the image that are in the given mountain."""
-        return sum(v for k, v in self.items() if k in mtn)
+        # Use caching to avoid recalculating for the same mountain
+        if not hasattr(self, "_mountain_size_cache"):
+            self._mountain_size_cache = {}
+
+        # Create a hashable key for the mountain
+        mtn_key = (mtn.u, mtn.v)
+        if mtn_key in self._mountain_size_cache:
+            return self._mountain_size_cache[mtn_key]
+
+        items = self.items()
+        if hasattr(self, "raw_histo"):
+            items = self.raw_histo.items()
+
+        size = sum(v for k, v in items if k in mtn)
+        self._mountain_size_cache[mtn_key] = size
+        return size
 
     def smooth(self, sigma=1) -> "UvHistogram":
         # Convert (L, u, v) -> count to an array of counts indexed by L, u, v
@@ -367,6 +391,10 @@ class UvHistogram(dict[Uv, int]):
                         v + min_indices[1],
                     )
                 ] = count
+
+        if hasattr(self, "raw_histo"):
+            h.raw_histo = self.raw_histo
+
         return h
 
     def threshold(self, threshold: float) -> "UvHistogram":
@@ -384,7 +412,7 @@ class LuvHistogram(dict[Luv, int]):
     def total(self):
         return sum(self.values())
 
-    def plot(self, ax: Axes):
+    def plot(self, ax: Axes, **kwargs):
         L, u, v = [], [], []
         colours = []
         for iL, iu, iv in self.keys():
@@ -394,13 +422,10 @@ class LuvHistogram(dict[Luv, int]):
             rgb = convert_color(LuvColor(iL, iu, iv), sRGBColor)
             colours.append(np.asarray(rgb.get_value_tuple()).clip(0, 1))
 
-        ax.scatter(
-            xs=u,
-            ys=v,
-            zs=L,
-            c=colours,
-            s=1,
-        )
+        if "s" not in kwargs:
+            kwargs["s"] = 2
+
+        ax.scatter(xs=u, ys=v, zs=L, c=colours, **kwargs)
         ax.set_xlabel("u")
         ax.set_ylabel("v")
         ax.set_zlabel("L")
@@ -412,6 +437,9 @@ class LuvHistogram(dict[Luv, int]):
                 h[Uv(u, v)] += count
 
         assert h.total() == self.total(), f"new {h.total()} != old {self.total()}"
+
+        if hasattr(self, "raw_histo"):
+            h.raw_histo = self.raw_histo.collapse_L()
 
         return h
 
@@ -479,7 +507,8 @@ class LuvHistogram(dict[Luv, int]):
                 h[k] = v
             else:
                 removed += v
-        print(f"Removed {removed} white pixels")
+        # print(f"Removed {removed} white pixels")
+        h.raw_histo = self
         return h
 
     def without_mountain(self, mtn: Mountain) -> "LuvHistogram":
@@ -517,15 +546,24 @@ class LuvHistogram(dict[Luv, int]):
     @classmethod
     def from_image(cls, image: Image) -> "LuvHistogram":
         h = cls()
-        tranparent = 0
-        for pixel in image.getdata():
-            if len(pixel) == 4 and pixel[3] == 0:
-                # skip transparent pixels
-                tranparent += 1
+        transparent = 0
+
+        arr = np.reshape(np.array(image.convert("RGBA")) / 255, (-1, 4))
+        c = sRGB(arr[:, 0], arr[:, 1], arr[:, 2])
+        c.to("CIELUV")
+        luv = c.get()
+        for i in range(len(arr)):
+            if arr[i, 3] < 0.7:
+                transparent += 1
                 continue
-            luv = Luv.from_rgb(pixel)
-            h[luv] += 1
-        print(f"Skipped {tranparent} transparent pixels")
+
+            # round to int as the smallest bucket size
+            coord = Luv(*[int(np.round(luv[d][i])) for d in ["L", "U", "V"]])
+            h[coord] += 1
+
+        print(
+            f"{getattr(image, 'filename', 'unknown')}: Loaded {h.total()}; skipped {transparent} transparent pixels. {len(image.getdata())} total; {image.width * image.height} [{image.width}x{image.height}]"
+        )
         return h
 
     def max_L(self, uv: Uv) -> Luv:
@@ -543,6 +581,17 @@ class LuvHistogram(dict[Luv, int]):
             if len(ls) == 0:
                 raise ValueError(f"No L values found for {uv}")
         return max(ls, key=lambda x: x[1])[0]
+
+    def chi_square(self, other: "LuvHistogram") -> float:
+        """Compute the chi-square statistic between this histogram and another."""
+        keys = set(self.keys()) | set(other.keys())
+        chi2 = 0.0
+        for k in keys:
+            o = self[k]
+            e = other[k]
+            if o + e > 0:
+                chi2 += (o - e) ** 2 / (o + e)
+        return chi2
 
 
 if __name__ == "__main__":

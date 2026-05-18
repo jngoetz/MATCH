@@ -1,23 +1,34 @@
 # Using MATCH
 **M**atching **a**nd **T**ransforming **C**losely **H**ued objects
 
+Goetz, J. N., & Neider, M. B. (2025). MATCH: A toolbox to assess the primary color of real-world objects and generate color-matching stimuli. Behavior Research Methods, 57(12), 1-22.
+
 ## Example
 Target:
 ![target](./tape-a.jpg)
 
-|Original|Transformed|
-|---|---|
-|![](./26467443.png)|![](./26467443_shifted.png)|
-|![](./Ajug158.png)|![](./Ajug158_shifted.png)|
-|![](./Lamborghini_Diablo.png)|![](./Lamborghini_Diablo_shifted.png)|
+|Original|Primary|Transformed|
+|---|---|---|
+|![](./26467443.png)|![](./26467443_swatch.png)<br>#b63433|![](./26467443_shifted.png)|
+|![](./Ajug158.png)|![](./Ajug158_swatch.png)<br>#c30c00|![](./Ajug158_shifted.png)|
+|![](./Lamborghini_Diablo.png)|![](./Lamborghini_Diablo_swatch.png)<br>#c30d06|![](./Lamborghini_Diablo_shifted.png)|
+
+Example images from the data sets:
+- Brady, T. F., Konkle, T., Alvarez, G. A., & Oliva, A. (2008). Visual long-term memory has a massive storage capacity for object details. Proceedings of the National Academy of Sciences, 105(38), 14325–14329. https://doi.org/10.1073/pnas.0803390105
+- Brady, T. F., Konkle, T., Alvarez, G. A., & Oliva, A. (2013). Realworld objects are not represented as bound units: Independent forgetting of different object details from visual memory. Journal of Experimental Psychology: General, 142(3), 791–808. https://doi.org/10.1037/a0029649
+- Brodeur, M. B., Guérard, K., & Bouras, M. (2014). Bank of standardized stimuli (BOSS) phase II: 930 new normative photos. PLoS ONE, 9(9), e106953. https://doi.org/10.1371/journal.pone.01069 53
+- Konkle, T., Brady, T. F., Alvarez, G. A., & Oliva, A. (2010). Conceptual distinctiveness supports detailed visual long-term memory for real-world objects. Journal of Experimental Psychology: General, 139(3), 558–578. https://doi.org/10.1037/a0019165
 
 ## Required Modules
 Requires `pandas`, `numpy`, `colormath`, `scikit-learn`, and `scikit-image` modules.
 
 To install via `pip` use:
 ```
-python -m pip install pandas numpy colormath scikit-learn scikit-image
+python -m pip install pandas numpy colormath scikit-learn scikit-image PolygonCollision
 ```
+
+## Components & Notebook
+For using individual components, see [example.ipynb](./example.ipynb).
 
 ## Basic usage
 To get the help message below, run (from the same folder as MATCH.py):
@@ -103,6 +114,10 @@ options:
 ```
 
 ## Changelog
+### 2026-05-18
+- Transparency support
+- Faster conversion using `colormath`
+- Add examples to readme and sample notebook
 ### 2024-05-23
 - Removed debug print lines
 - Fix bug where output directory wouldn't be created if not already existing

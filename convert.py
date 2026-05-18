@@ -13,15 +13,20 @@ debug_enabled = False
 def shift_mountain(image: Image.Image, m: Mountain, to: Uv):
     i2 = image.copy()
 
-    dist = np.asarray(to) - m.peak
+    dist = (np.asarray(to) - m.peak).astype(float)
     if debug_enabled:
-        print(f"Converting {m.peak} to {to} (dist: {dist})")
+        print(f"Converting {image.filename} {m.peak} to {to} (dist: {dist})")
 
     converted = 0
     cache = {}
     for x in range(image.width):
         for y in range(image.height):
             rgb = image.getpixel((x, y))
+            alpha = None if len(rgb) < 4 else rgb[3]
+            if alpha is not None and alpha == 0:
+                # Skip fully transparent pixels for performance
+                continue
+            rgb = rgb[:3]
             rgb_old = rgb
             luv = np.asarray(
                 convert_color(
@@ -29,6 +34,9 @@ def shift_mountain(image: Image.Image, m: Mountain, to: Uv):
                 ).get_value_tuple()
             )
             if luv not in m:
+                continue
+            if luv[0] < 5 or luv[0] > 95:
+                # Skip very dark/light pixels don't convert well
                 continue
 
             luv[1] += dist[0]
@@ -38,8 +46,22 @@ def shift_mountain(image: Image.Image, m: Mountain, to: Uv):
             else:
                 rgb = convert_color(LuvColor(*luv), sRGBColor).get_value_tuple()
                 rgb = (np.asarray(rgb) * 255).clip(0, 255)
+
+                if debug_enabled:
+                    new_luv = convert_color(
+                        sRGBColor(*rgb, is_upscaled=True), LuvColor
+                    ).get_value_tuple()
+                    diff = np.linalg.norm(np.asarray(new_luv) - luv)
+                    if diff > 10:
+                        print(
+                            f"Warning: large color conversion error: {luv} -> {new_luv} (diff {diff})"
+                        )
+
                 rgb = tuple(rgb.astype(int))
                 cache[tuple(luv)] = rgb
+
+            if alpha is not None:
+                rgb = (*rgb, alpha)
             i2.putpixel((x, y), rgb)
             if rgb != rgb_old:
                 converted += 1

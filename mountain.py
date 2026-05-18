@@ -2,6 +2,7 @@ from typing import NamedTuple, Tuple
 
 import numpy as np
 from matplotlib.axes import Axes
+from PolygonCollision.shape import Shape
 
 
 class MountainParams(NamedTuple):
@@ -54,6 +55,14 @@ class Mountain(NamedTuple):
             np.asarray([self.v[1], self.v[0], self.v[1], self.v[2]]),
         )
 
+    def move_to(self, new_peak: Tuple[int, int]) -> "Mountain":
+        du = new_peak[0] - self.peak[0]
+        dv = new_peak[1] - self.peak[1]
+        return Mountain(
+            (self.u[0] + du, self.u[1] + du, self.u[2] + du),
+            (self.v[0] + dv, self.v[1] + dv, self.v[2] + dv),
+        )
+
     def axes_for_point(self, point):
         u, v = point[:2]
 
@@ -69,6 +78,11 @@ class Mountain(NamedTuple):
         ry -= self.v[1]
 
         return abs(rx), abs(ry)
+
+    def has_zero_axis(self):
+        if self.u[1] in (self.u[0], self.u[2]):
+            return True
+        return self.v[1] in (self.v[0], self.v[2])
 
     def __contains__(self, point):
         u, v = point[-2:]
@@ -121,8 +135,36 @@ class Mountain(NamedTuple):
 
     def overlaps(self, other: "Mountain") -> bool:
         """Returns whether this mountain overlaps with another mountain."""
-        edge = self.edge_towards(other.peak)
-        return edge in other
+
+        # Fast AABB (axis-aligned bounding box) check using .lower and .upper
+        self_min_u, self_min_v = self.lower
+        self_max_u, self_max_v = self.upper
+        other_min_u, other_min_v = other.lower
+        other_max_u, other_max_v = other.upper
+
+        if (
+            self_max_u < other_min_u
+            or self_min_u > other_max_u
+            or self_max_v < other_min_v
+            or self_min_v > other_max_v
+        ):
+            # If the bounding boxes do not overlap, the mountains do not overlap
+            return False
+
+        # Quick checks with the peaks and edge points
+        if other.peak in self or self.peak in other:
+            return True
+        for point in zip(*self.coordinates):
+            if point in other:
+                return True
+        for point in zip(*other.coordinates):
+            if point in self:
+                return True
+
+        a = Shape(list(zip(*self.ellipse())))
+        b = Shape(list(zip(*other.ellipse())))
+
+        return a.collide(b)
 
     def ellipse(self):
         # distances from the peak
@@ -152,4 +194,18 @@ class Mountain(NamedTuple):
             color=ellipse_color,
             zorder=3,
             linewidth=1,
+        )
+
+    def plot2d(
+        self,
+        ax: Axes,
+        ellipse_color: str = "black",
+    ) -> tuple:
+        e_u, e_v = self.ellipse()
+        ax.plot(
+            xs=e_u,
+            ys=e_v,
+            color=ellipse_color,
+            zorder=3,
+            linewidth=4,
         )
