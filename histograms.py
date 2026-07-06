@@ -1,9 +1,8 @@
 from typing import List, NamedTuple, Sequence, Tuple
 
 import numpy as np
-from colormath.color_conversions import convert_color
-from colormath.color_objects import LuvColor, sRGBColor
 from colorspace import sRGB
+from colorspace.colorlib import CIELUV
 from matplotlib import pyplot as plt
 from matplotlib.axes import Axes
 from PIL.Image import Image
@@ -14,6 +13,28 @@ from mountain import Mountain, MountainParams, default_params
 debug_enabled = False
 
 
+def rgb_to_luv(rgb: np.ndarray) -> np.ndarray:
+    """sRGB in [0, 1] -> CIELUV (D65). Accepts any (..., 3) shape."""
+    a = np.asarray(rgb, dtype=float)
+    flat = a.reshape(-1, 3)
+    c = sRGB(flat[:, 0].copy(), flat[:, 1].copy(), flat[:, 2].copy())
+    c.to("CIELUV")
+    d = c.get()
+    out = np.stack([np.asarray(d["L"]), np.asarray(d["U"]), np.asarray(d["V"])], axis=1)
+    return out.reshape(a.shape)
+
+
+def luv_to_rgb(luv: np.ndarray) -> np.ndarray:
+    """CIELUV (D65) -> sRGB in [0, 1] (unclamped). Accepts any (..., 3) shape."""
+    a = np.asarray(luv, dtype=float)
+    flat = a.reshape(-1, 3)
+    c = CIELUV(flat[:, 0].copy(), flat[:, 1].copy(), flat[:, 2].copy())
+    c.to("sRGB")
+    d = c.get()
+    out = np.stack([np.asarray(d["R"]), np.asarray(d["G"]), np.asarray(d["B"])], axis=1)
+    return out.reshape(a.shape)
+
+
 class Luv(NamedTuple):
     L: float  # 0 to 100
     u: float  # -134 to 220
@@ -21,15 +42,11 @@ class Luv(NamedTuple):
 
     @classmethod
     def from_rgb(cls, pixel: Sequence[int]):
-        luv = convert_color(
-            sRGBColor(*pixel[:3], is_upscaled=True),
-            LuvColor,
-            target_illuminant="d65",
-        )
+        L, u, v = rgb_to_luv(np.asarray(pixel[:3], dtype=float) / 255)
         return cls(
-            np.clip(luv.luv_l, 0, 100),
-            np.clip(luv.luv_u, -134, 220),
-            np.clip(luv.luv_v, -140, 122),
+            np.clip(L, 0, 100),
+            np.clip(u, -134, 220),
+            np.clip(v, -140, 122),
         )
 
     @classmethod
@@ -40,22 +57,20 @@ class Luv(NamedTuple):
         return cls.from_rgb(rgb)
 
     def to_rgb(self):
-        return np.array(
-            convert_color(
-                LuvColor(self.L, self.u, self.v),
-                sRGBColor,
-            ).get_value_tuple()
-        ).clip(0, 1)
+        return luv_to_rgb([self.L, self.u, self.v]).clip(0, 1)
 
     def hex(self):
         rgb = self.to_rgb()
         rgb = (rgb * 255).clip(0, 255).astype(int)
         return f"#{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}"
 
+    def distance(self, other: "Luv") -> float:
+        return np.linalg.norm(np.array(self) - np.array(other))
+
 
 class Uv(NamedTuple):
-    u: float  # -134 to 220
-    v: float  # -140 to 122
+    u: int  # -134 to 220
+    v: int  # -140 to 122
 
 
 class Histogram(dict[int, int]):
@@ -64,14 +79,23 @@ class Histogram(dict[int, int]):
 
     def plot(self, ax: Axes, L: int = 100):
         x = list(self.keys())
-        if hasattr(self, "u") and hasattr(self, "v"):
-            c = [Luv(L, self.u, self.v).to_rgb() for L in x]
+        # Color each bar by its Luv value. Build the whole (N, 3) Luv array and
+        # convert in one batched call rather than one conversion per bar. Which
+        # axis the bar keys (x) map to depends on what this slice holds fixed.
+        xa = np.asarray(x, dtype=float)
+        n = len(xa)
+        if n == 0:
+            c = None
+        elif hasattr(self, "u") and hasattr(self, "v"):
+            c = luv_to_rgb(np.column_stack([xa, np.full(n, self.u), np.full(n, self.v)]))
         elif hasattr(self, "u"):
-            c = [Luv(L, self.u, v).to_rgb() for v in x]
+            c = luv_to_rgb(np.column_stack([np.full(n, L), np.full(n, self.u), xa]))
         elif hasattr(self, "v"):
-            c = [Luv(L, u, self.v).to_rgb() for u in x]
+            c = luv_to_rgb(np.column_stack([np.full(n, L), xa, np.full(n, self.v)]))
         else:
             c = None
+        if c is not None:
+            c = c.clip(0, 1)
 
         ax.bar(
             x=x,
@@ -176,14 +200,13 @@ class UvHistogram(dict[Uv, int]):
         if Ls is None:
             Ls = self.luv_histo.most_common_Ls()
 
-        u, v, count = [], [], []
-        colours = []
-        for (iu, iv), icount in self.items():
-            u.append(iu)
-            v.append(iv)
-            count.append(icount)
-            rgb = convert_color(LuvColor(Ls.get(Uv(iu, iv), 100), iu, iv), sRGBColor)
-            colours.append(np.asarray(rgb.get_value_tuple()).clip(0, 1))
+        items = list(self.items())
+        u = [iu for (iu, iv), _ in items]
+        v = [iv for (iu, iv), _ in items]
+        count = [icount for _, icount in items]
+        # Look up each bar's L, then convert all Luv values to RGB in one call.
+        L = [Ls.get(Uv(iu, iv), 100) for (iu, iv), _ in items]
+        colors = luv_to_rgb(np.column_stack([L, u, v])).clip(0, 1) if items else None
 
         bars = ax.bar3d(
             x=u,
@@ -192,7 +215,7 @@ class UvHistogram(dict[Uv, int]):
             dx=1,
             dy=1,
             dz=count,
-            color=colours,
+            color=colors,
         )
         ax.set_xlabel("u")
         ax.set_ylabel("v")
@@ -413,19 +436,15 @@ class LuvHistogram(dict[Luv, int]):
         return sum(self.values())
 
     def plot(self, ax: Axes, **kwargs):
-        L, u, v = [], [], []
-        colours = []
-        for iL, iu, iv in self.keys():
-            L.append(iL)
-            u.append(iu)
-            v.append(iv)
-            rgb = convert_color(LuvColor(iL, iu, iv), sRGBColor)
-            colours.append(np.asarray(rgb.get_value_tuple()).clip(0, 1))
+        # Keys are (L, u, v); convert them all to RGB in one batched call.
+        luv = np.array(list(self.keys()), dtype=float).reshape(-1, 3)
+        L, u, v = luv[:, 0], luv[:, 1], luv[:, 2]
+        colors = luv_to_rgb(luv).clip(0, 1) if len(luv) else None
 
         if "s" not in kwargs:
             kwargs["s"] = 2
 
-        ax.scatter(xs=u, ys=v, zs=L, c=colours, **kwargs)
+        ax.scatter(xs=u, ys=v, zs=L, c=colors, **kwargs)
         ax.set_xlabel("u")
         ax.set_ylabel("v")
         ax.set_zlabel("L")
@@ -546,20 +565,18 @@ class LuvHistogram(dict[Luv, int]):
     @classmethod
     def from_image(cls, image: Image) -> "LuvHistogram":
         h = cls()
-        transparent = 0
 
-        arr = np.reshape(np.array(image.convert("RGBA")) / 255, (-1, 4))
-        c = sRGB(arr[:, 0], arr[:, 1], arr[:, 2])
-        c.to("CIELUV")
-        luv = c.get()
-        for i in range(len(arr)):
-            if arr[i, 3] < 0.7:
-                transparent += 1
-                continue
+        arr = np.asarray(image.convert("RGBA")).reshape(-1, 4)
+        keep = arr[:, 3] >= 128  # alpha/255 >= 0.5
+        transparent = int((~keep).sum())
 
-            # round to int as the smallest bucket size
-            coord = Luv(*[int(np.round(luv[d][i])) for d in ["L", "U", "V"]])
-            h[coord] += 1
+        if keep.any():
+            luv = rgb_to_luv(arr[keep, :3].astype(float) / 255)
+            coords = np.round(luv).astype(int)
+            # Count identical Luv coordinates in one pass instead of per pixel.
+            uniq, counts = np.unique(coords, axis=0, return_counts=True)
+            for (L, u, v), count in zip(uniq, counts):
+                h[Luv(int(L), int(u), int(v))] = int(count)
 
         print(
             f"{getattr(image, 'filename', 'unknown')}: Loaded {h.total()}; skipped {transparent} transparent pixels. {len(image.getdata())} total; {image.width * image.height} [{image.width}x{image.height}]"
