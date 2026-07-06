@@ -114,6 +114,9 @@ options:
 ```
 
 ## Changelog
+### 2026-07-06
+- Add `shift_all` for shifting all colors (compared to `shift_mountain` which only shifted the specified mountain's colors)
+- Histogram calculation and shifting performance improvements
 ### 2026-05-18
 - Transparency support
 - Faster conversion using `colormath`
