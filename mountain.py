@@ -42,7 +42,8 @@ class Mountain(NamedTuple):
 
     @property
     def peak(self):
-        return (self.u[1], self.v[1])
+        from histograms import Uv
+        return Uv(self.u[1], self.v[1])
 
     @property
     def upper(self):

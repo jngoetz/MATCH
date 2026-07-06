@@ -67,7 +67,10 @@ def resize(
 
 
 def image_histo(
-    input: Image.Image | Path | str, cache_mode=CacheMode.ENABLED
+    input: Image.Image | Path | str,
+    cache_mode=CacheMode.ENABLED,
+    cache_dir: Path = dir / "histograms",
+    return_cache_path: bool = False,
 ) -> LuvHistogram:
     """Return the LuvHistogram for an image.
     Caches histograms in './histograms' directory.
@@ -83,15 +86,20 @@ def image_histo(
     else:
         name = None
 
+    if name is None and cache_mode.enabled():
+        print("Could not determine name, skipping cache")
+
     if name is not None and cache_mode.enabled():
         # Caching
         parent = name.parent
-        histo_path = dir / "histograms" / parent.name / name.with_suffix(".p").name
+        histo_path = cache_dir / parent.name / name.with_suffix(".p").name
 
         if histo_path.exists():
             # cache hit
             try:
                 with histo_path.open("rb") as f:
+                    if return_cache_path:
+                        return pickle.load(f), histo_path
                     return pickle.load(f)
             except:
                 pass
@@ -109,11 +117,13 @@ def image_histo(
     histo = LuvHistogram.from_image(image)
 
     if name is not None and cache_mode.enabled():
-        histo_path.parent.mkdir(exist_ok=True)
+        histo_path.parent.mkdir(exist_ok=True, parents=True)
         histo_path.unlink(missing_ok=True)  # remove old file if it exists
         with histo_path.open("wb") as f:
             pickle.dump(histo, f)
 
+    if return_cache_path:
+        return histo, histo_path
     return histo
 
 
