@@ -5,13 +5,13 @@ Goetz, J. N., & Neider, M. B. (2025). MATCH: A toolbox to assess the primary col
 
 ## Example
 Target:
-![target](./tape-a.jpg)
+![target](./images/tape-a.jpg)
 
 |Original|Primary|Transformed|
 |---|---|---|
-|![](./26467443.png)|![](./26467443_swatch.png)<br>#b63433|![](./26467443_shifted.png)|
-|![](./Ajug158.png)|![](./Ajug158_swatch.png)<br>#c30c00|![](./Ajug158_shifted.png)|
-|![](./Lamborghini_Diablo.png)|![](./Lamborghini_Diablo_swatch.png)<br>#c30d06|![](./Lamborghini_Diablo_shifted.png)|
+|![](./images/26467443.png)|![](./images/26467443_swatch.png)<br>#b63433|![](./images/26467443_shifted.png)|
+|![](./images/Ajug158.png)|![](./images/Ajug158_swatch.png)<br>#c30c00|![](./images/Ajug158_shifted.png)|
+|![](./images/Lamborghini_Diablo.png)|![](./images/Lamborghini_Diablo_swatch.png)<br>#c30d06|![](./images/Lamborghini_Diablo_shifted.png)|
 
 Example images from the data sets:
 - Brady, T. F., Konkle, T., Alvarez, G. A., & Oliva, A. (2008). Visual long-term memory has a massive storage capacity for object details. Proceedings of the National Academy of Sciences, 105(38), 14325–14329. https://doi.org/10.1073/pnas.0803390105
